@@ -7,9 +7,15 @@ const { generateMovePairs, updateReferences, moveFiles } = require('./move.js');
 
 function printHelp() {
   console.log(`
-Usage: node index.js [options] <source(s)> <destination>
+Usage: node index.js [options] source_dir <source(s)> <destination>
 
-sources and destination can be relative to cwd.
+source_dir: The directory to search for the cpp files.
+
+sources: The files to move, wildcards enabled
+
+destination: The destination of the files.
+
+source_dir sources and destination can be relative to cwd.
 
 Options:
   --cmd-path <path>    Path to compile_commands.json. Defaults to searching in 'build/'
@@ -42,14 +48,15 @@ function runCli() {
   }
 
   // Expecting at least 2 remaining positional arguments (source(s) and destination)
-  if (positional_args.length < 2) {
-    console.error("Error: Missing source or destination path parameters.");
+  if (positional_args.length < 3) {
+    console.error("Error: Missing source_dir, source or destination path parameters.");
     printHelp();
     process.exit(1);
   }
 
-  const dest = positional_args.pop(); // The final element is our target directory or filename
-  const sources = positional_args;    // Elements left behind are the sources / wildcards
+  const src_dir = path.resolve(positional_args.shift());
+  const dest = path.resolve(positional_args.pop());
+  const sources = positional_args.map(src => path.resolve(src));
 
   // 1. Resolve compile_commands.json location path
   const final_cmd_path = cmd_path
@@ -78,12 +85,9 @@ function runCli() {
     process.exit(0);
   }
 
-  // 3. Update paths within C++ content and then physically relocate files
-  const root_dir = process.cwd();
-
   // Note: References must be updated first before files are missing from their old locations
-  updateReferences(root_dir, commands, move_pairs);
-  moveFiles(root_dir, move_pairs, with_git);
+  updateReferences(src_dir, commands, move_pairs);
+  moveFiles(move_pairs, with_git);
 
   console.log("Success: Files moved and C++ header references updated safely.");
 }

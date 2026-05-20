@@ -26,7 +26,7 @@ function getAllFiles(dir, extensions, fileList = []) {
  * WARNING: We only deal with "" includes, not <> includes.
  */
 function parseIncludes(fileContent) {
-  const includeRegex = /#\s*include\s*["]([^"]+)["]/g;
+  const includeRegex = /#\s*include\s*[<"]([^>"]+)[">]/g;
   const matches = [];
   let match;
   while ((match = includeRegex.exec(fileContent)) !== null) {
@@ -169,20 +169,15 @@ function generateMovePairs(src_wildcards, dest) {
 }
 
 function simplifyPath(cur_dir, inc_dirs, ref_path) {
-  let deepest_inc_dir = null;
-
-  const rel_inc_dir_from_cur_dir = path.relative(cur_dir, ref_path);
-  if (!rel_inc_dir_from_cur_dir.startsWith('..')) {
-    if (!deepest_inc_dir || cur_dir.length > deepest_inc_dir.length) {
-      deepest_inc_dir = cur_dir;
-    }
-  }
+  let deepest_inc_dir = cur_dir;
+  let inc_dir_has_ref_path = !(path.relative(cur_dir, ref_path).startsWith('..'));
 
   inc_dirs.forEach(dir => {
     const rel_inc_dir = path.relative(dir, ref_path);
 
     if (!rel_inc_dir.startsWith('..')) {
-      if (!deepest_inc_dir || dir.length > deepest_inc_dir.length) {
+      if (!inc_dir_has_ref_path || dir.length > deepest_inc_dir.length) {
+        inc_dir_has_ref_path = true;
         deepest_inc_dir = dir;
       }
     }
@@ -228,7 +223,7 @@ function updateReferences(root_dir, commands, move_pairs) {
     includes.forEach(inc => {
       const ref_path = resolveIncludePath(src_dir, inc.literal, include_dirs);
       if (!ref_path) {
-        console.log(`Header file ${inc.literal} in file ${src_path} not found!`);
+        // console.log(`Header file ${inc.literal} in file ${src_path} not found!`);
         return;
       }
 
@@ -253,10 +248,10 @@ function updateReferences(root_dir, commands, move_pairs) {
   });
 }
 
-function moveFiles(root_dir, move_pairs, with_git) {
+function moveFiles(move_pairs, with_git) {
   move_pairs.forEach(pair => {
-    const src_abs = path.resolve(root_dir, pair.oldLocation);
-    const tar_abs = path.resolve(root_dir, pair.newLocation);
+    const src_abs = pair.oldLocation;
+    const tar_abs = pair.newLocation;
 
     if (fs.existsSync(src_abs)) {
       // Ensure target directory exists before running git mv
