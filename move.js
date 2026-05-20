@@ -124,6 +124,50 @@ function resolveIncludePath(cur_dir, inc_literals, inc_dirs) {
   return null; // Could not be resolved locally, do not change this
 }
 
+function generateMovePairs(src_wildcards, dest) {
+  const src_list = [];
+  const results = [];
+
+  for (const pattern of src_wildcards) {
+    try {
+      const matches = fs.globSync(pattern);
+      src_list.push(...matches);
+    } catch (err) {
+      console.error(`Error parsing pattern "${pattern}":`, err.message);
+    }
+  }
+
+  if (src_list.length === 0) {
+    console.log("No matching source files found for the provided arguments.");
+    return [];
+  }
+
+  let is_dest_dir = false;
+  if (fs.existsSync(dest) && fs.statSync(dest).isDirectory()) {
+    is_dest_dir = true;
+  }
+
+  if (!is_dest_dir && !fs.existsSync(path.dirname(dest))) {
+    throw new Error(`Move directory ${path.dirname(dest)} does not exist!`);
+  }
+
+  if (src_list.length > 1 && !is_dest_dir) {
+    throw new Error(`Moving multiple source files to the same location!`);
+  }
+
+  for (const src of src_list) {
+    const tar_path = is_dest_dir
+          ? path.join(dest, path.basename(src))
+          : dest;
+
+    results.push({
+      oldLocation: path.resolve(src),
+      newLocation: path.resolve(tar_path)
+    });
+  }
+  return results;
+}
+
 function simplifyPath(cur_dir, inc_dirs, ref_path) {
   let deepest_inc_dir = null;
 
@@ -152,17 +196,15 @@ function simplifyPath(cur_dir, inc_dirs, ref_path) {
   }
 }
 
-function updateReferences(root_dir, compile_commands_path, move_pairs_json_path) {
+function updateReferences(root_dir, commands, move_pairs) {
   const cpp_exts = ['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx'];
   const files = getAllFiles(root_dir, cpp_exts);
   console.log('All files:');
   console.log(files);
-  const pairs = JSON.parse(fs.readFileSync(move_pairs_json_path, 'utf8'));
-  const commands = JSON.parse(fs.readFileSync(compile_commands_path, 'utf8'));
 
   // moveMap is a map from absolute path of old location to absolute path of new location
   const move_map = new Map();
-  pairs.forEach(pair => {
+  move_pairs.forEach(pair => {
     move_map.set(path.resolve(root_dir, pair.oldLocation), path.resolve(root_dir, pair.newLocation));
   });
 
@@ -211,14 +253,8 @@ function updateReferences(root_dir, compile_commands_path, move_pairs_json_path)
   });
 }
 
-function moveFiles(root_dir, move_pairs_json_path, with_git) {
-  if (!fs.existsSync(move_pairs_json_path)) {
-    throw new Error(`Move list JSON not found at ${move_pairs_json_path}`);
-  }
-
-  const pairs = JSON.parse(fs.readFileSync(move_pairs_json_path, 'utf8'));
-
-  pairs.forEach(pair => {
+function moveFiles(root_dir, move_pairs, with_git) {
+  move_pairs.forEach(pair => {
     const src_abs = path.resolve(root_dir, pair.oldLocation);
     const tar_abs = path.resolve(root_dir, pair.newLocation);
 
@@ -243,6 +279,7 @@ function moveFiles(root_dir, move_pairs_json_path, with_git) {
 }
 
 module.exports = {
+  generateMovePairs,
   updateReferences,
   moveFiles,
 };

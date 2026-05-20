@@ -1,55 +1,91 @@
+#!/usr/bin/env node
+
 const fs = require('fs');
 const path = require('path');
-const { updateReferences, moveFiles } = require('./move.js');
+// Import the core functions from your module file
+const { generateMovePairs, updateReferences, moveFiles } = require('./move.js');
 
-const args = process.argv.slice(2);
-
-if (args.length < 3 || args.includes('--help') || args.includes('-h')) {
+function printHelp() {
   console.log(`
-Usage: node index.js <root_dir> <compile_commands_path> <move_pairs_json_path> [--git]
+Usage: node index.js [options] <source(s)> <destination>
 
-Arguments:
-  root_dir               The C++ project root directory.
-  compile_commands_path  Path to the compile_commands.json file.
-  move_pairs_json_path   Path to the JSON list containing the move mappings.
+sources and destination can be relative to cwd.
 
 Options:
-  --git                  Use git mv to execute structural moving operations (Optional)
-  `);
-  process.exit(args.length === 0 ? 0 : 1);
+  --cmd-path <path>    Path to compile_commands.json. Defaults to searching in 'build/'
+  --git                Move files using 'git mv' instead of native 'mv'
+  -h, --help           Show this help manual
+`);
 }
 
-const root_dir = path.resolve(args[0]);
-const compile_commands_path = path.resolve(args[1]);
-const move_pairs_json_path = path.resolve(args[2]);
-const use_git = args.includes('--git');
+function runCli() {
+  const args = process.argv.slice(2);
 
-console.log('--- Commencing Reference Refactoring Pipeline ---');
-
-try {
-  if (!fs.existsSync(root_dir)) {
-    throw new Error(`Root directory does not exist: ${root_dir}`);
-  }
-  if (!fs.existsSync(compile_commands_path)) {
-    throw new Error(`Compile commands file does not exist: ${compile_commands_path}`);
-  }
-  if (!fs.existsSync(move_pairs_json_path)) {
-    throw new Error(`Move pair file does not exist: ${move_pairs_json_path}`);
+  if (args.includes('-h') || args.includes('--help') || args.length === 0) {
+    printHelp();
+    process.exit(0);
   }
 
-  // Run string mutations first while files are still stationary
-  console.log('[1/2] Rewriting C++ inclusion strings based on future layout schema...');
-  updateReferences(root_dir, compile_commands_path, move_pairs_json_path);
+  let cmd_path = null;
+  let with_git = false;
+  const positional_args = [];
 
-  // Execute physical migrations
-  console.log(`[2/2] Migrating project items physically (Git mode: ${use_git ? 'ENABLED' : 'DISABLED'})...`);
-  moveFiles(root_dir, move_pairs_json_path, use_git);
+  // Parse arguments out manually to avoid unnecessary dependencies
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--cmd-path') {
+      cmd_path = args[++i];
+    } else if (args[i] === '--git') {
+      with_git = true;
+    } else {
+      positional_args.push(args[i]);
+    }
+  }
 
-  console.log('------------------------------------------------');
-  console.log('SUCCESS: Structural layout configuration finalized cleanly.');
+  // Expecting at least 2 remaining positional arguments (source(s) and destination)
+  if (positional_args.length < 2) {
+    console.error("Error: Missing source or destination path parameters.");
+    printHelp();
+    process.exit(1);
+  }
 
-} catch (error) {
-  console.error('\nExecution Failure Exception Encountered:');
-  console.error(error.message);
-  process.exit(1);
+  const dest = positional_args.pop(); // The final element is our target directory or filename
+  const sources = positional_args;    // Elements left behind are the sources / wildcards
+
+  // 1. Resolve compile_commands.json location path
+  const final_cmd_path = cmd_path
+    ? path.resolve(cmd_path)
+    : path.resolve(process.cwd(), 'build', 'compile_commands.json');
+
+  if (!fs.existsSync(final_cmd_path)) {
+    console.error(`Error: Could not locate compile_commands.json at "${final_cmd_path}"`);
+    process.exit(1);
+  }
+
+  console.log(`Using compile_commands.json found at: ${final_cmd_path}`);
+  const commands = JSON.parse(fs.readFileSync(final_cmd_path, 'utf8'));
+
+  // 2. Generate the change mappings
+  let move_pairs = null;
+  try {
+    move_pairs = generateMovePairs(sources, dest);
+  } catch (err) {
+    console.error(err.message || err);
+    process.exit(1);
+  }
+
+  if (move_pairs.length === 0) {
+    console.log("No moves to perform.");
+    process.exit(0);
+  }
+
+  // 3. Update paths within C++ content and then physically relocate files
+  const root_dir = process.cwd();
+
+  // Note: References must be updated first before files are missing from their old locations
+  updateReferences(root_dir, commands, move_pairs);
+  moveFiles(root_dir, move_pairs, with_git);
+
+  console.log("Success: Files moved and C++ header references updated safely.");
 }
+
+runCli();
