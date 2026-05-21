@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 // Import the core functions from your module file
-const { generateMovePairs, updateReferences, moveFiles } = require('./move.js');
+const { generateMovePairs, updateReferences, moveFiles, getIncludeDirsFromCompileCommands } = require('./move.js');
 
 function printHelp() {
   console.log(`
@@ -58,7 +58,6 @@ function runCli() {
   const dest = path.resolve(positional_args.pop());
   const sources = positional_args.map(src => path.resolve(src));
 
-  // 1. Resolve compile_commands.json location path
   const final_cmd_path = cmd_path
     ? path.resolve(cmd_path)
     : path.resolve(process.cwd(), 'build', 'compile_commands.json');
@@ -71,7 +70,8 @@ function runCli() {
   console.log(`Using compile_commands.json found at: ${final_cmd_path}`);
   const commands = JSON.parse(fs.readFileSync(final_cmd_path, 'utf8'));
 
-  // 2. Generate the change mappings
+  const include_dir_map = getIncludeDirsFromCompileCommands(commands);
+
   let move_pairs = null;
   try {
     move_pairs = generateMovePairs(sources, dest);
@@ -86,7 +86,7 @@ function runCli() {
   }
 
   // Note: References must be updated first before files are missing from their old locations
-  updateReferences(src_dir, commands, move_pairs);
+  updateReferences(src_dir, include_dir_map, move_pairs);
   moveFiles(move_pairs, with_git);
 
   console.log("Success: Files moved and C++ header references updated safely.");
