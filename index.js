@@ -3,11 +3,11 @@
 const fs = require('fs');
 const path = require('path');
 // Import the core functions from your module file
-const { generateMovePairs, updateReferences, moveFiles, getIncludeDirsFromCompileCommands } = require('./move.js');
+const { generateMovePairs, simplifyReferences, updateReferences, moveFiles, getIncludeDirsFromCompileCommands } = require('./move.js');
 
 function printHelp() {
   console.log(`
-Usage: node index.js [options] source_dir <source(s)> <destination>
+Usage: node index.js [options] source_dir (<source(s)> <destination> || --clean)
 
 source_dir: The directory to search for the cpp files.
 
@@ -18,6 +18,7 @@ destination: The destination of the files.
 source_dir sources and destination can be relative to cwd.
 
 Options:
+  --clean              Only clean the reference, do not move files
   --cmd-path <path>    Path to compile_commands.json. Defaults to searching in 'build/'
   --git                Move files using 'git mv' instead of native 'mv'
   -h, --help           Show this help manual
@@ -34,6 +35,7 @@ function runCli() {
 
   let cmd_path = null;
   let with_git = false;
+  let clean_only = false;
   const positional_args = [];
 
   // Parse arguments out manually to avoid unnecessary dependencies
@@ -42,25 +44,24 @@ function runCli() {
       cmd_path = args[++i];
     } else if (args[i] === '--git') {
       with_git = true;
+    } else if (args[i] === '--clean') {
+      clean_only = true;
     } else {
       positional_args.push(args[i]);
     }
   }
 
-  // Expecting at least 2 remaining positional arguments (source(s) and destination)
-  if (positional_args.length < 3) {
-    console.error("Error: Missing source_dir, source or destination path parameters.");
+  if (positional_args.length < 1) {
+    console.error("Error: Too few arguments");
     printHelp();
     process.exit(1);
   }
 
   const src_dir = path.resolve(positional_args.shift());
-  const dest = path.resolve(positional_args.pop());
-  const sources = positional_args.map(src => path.resolve(src));
 
   const final_cmd_path = cmd_path
-    ? path.resolve(cmd_path)
-    : path.resolve(process.cwd(), 'build', 'compile_commands.json');
+        ? path.resolve(cmd_path)
+        : path.resolve(process.cwd(), 'build', 'compile_commands.json');
 
   if (!fs.existsSync(final_cmd_path)) {
     console.error(`Error: Could not locate compile_commands.json at "${final_cmd_path}"`);
@@ -72,24 +73,41 @@ function runCli() {
 
   const include_dir_map = getIncludeDirsFromCompileCommands(commands);
 
-  let move_pairs = null;
-  try {
-    move_pairs = generateMovePairs(sources, dest);
-  } catch (err) {
-    console.error(err.message || err);
-    process.exit(1);
+
+  if (clean_only) {
+    simplifyReferences(src_dir, include_dir_map);
+    console.log("Success: Simplify references safely.");
+  } else {
+    // Expecting at least 2 remaining positional arguments (source(s) and destination)
+    if (positional_args.length < 2) {
+      console.error("Error: Missing source or destination path parameters.");
+      printHelp();
+      process.exit(1);
+    }
+
+    const dest = path.resolve(positional_args.pop());
+    const sources = positional_args.map(src => path.resolve(src));
+
+    let move_pairs = null;
+    try {
+      move_pairs = generateMovePairs(sources, dest);
+    } catch (err) {
+      console.error(err.message || err);
+      process.exit(1);
+    }
+
+    if (move_pairs.length === 0) {
+      console.log("No moves to perform.");
+      process.exit(0);
+    }
+
+    // Note: References must be updated first before files are missing from their old locations
+    updateReferences(src_dir, include_dir_map, move_pairs);
+    moveFiles(move_pairs, with_git);
+
+    console.log("Success: Files moved and C++ header references updated safely.");
   }
 
-  if (move_pairs.length === 0) {
-    console.log("No moves to perform.");
-    process.exit(0);
-  }
-
-  // Note: References must be updated first before files are missing from their old locations
-  updateReferences(src_dir, include_dir_map, move_pairs);
-  moveFiles(move_pairs, with_git);
-
-  console.log("Success: Files moved and C++ header references updated safely.");
 }
 
 runCli();

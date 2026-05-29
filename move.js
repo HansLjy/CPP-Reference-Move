@@ -80,7 +80,8 @@ function getIncludeDirs(cpp_file_path, include_dir_map) {
       }
 
       if (steal_include_dirs) {
-        console.log (`Compile commands for ${cpp_file_path} not found, stealing from ${stolen_path}...`);
+        // This is too common a thing so we do not report it.
+        // console.log (`Compile commands for ${cpp_file_path} not found, stealing from ${stolen_path}...`);
       }
 
       // Heuristic 2: Try to steal from any other source file in the exact same directory
@@ -182,6 +183,20 @@ function simplifyPath(cur_dir, inc_dirs, ref_path) {
   return path.relative(deepest_inc_dir, ref_path);
 }
 
+function simplifyPathWOCurDir(inc_dirs, ref_path) {
+  let deepest_inc_dir = null
+  inc_dirs.forEach(dir => {
+    const rel_inc_dir = path.relative(dir, ref_path);
+
+    if (!rel_inc_dir.startsWith('..')) {
+      if (!deepest_inc_dir || dir.length > deepest_inc_dir.length) {
+        deepest_inc_dir = dir;
+      }
+    }
+  });
+  return path.relative(deepest_inc_dir, ref_path);
+}
+
 function updateReferences(root_dir, include_dir_map, move_pairs) {
   const cpp_exts = ['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx'];
   const files = getAllFiles(root_dir, cpp_exts);
@@ -241,6 +256,52 @@ function updateReferences(root_dir, include_dir_map, move_pairs) {
   });
 }
 
+function simplifyReferences(root_dir, include_dir_map) {
+  const cpp_exts = ['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx'];
+  const files = getAllFiles(root_dir, cpp_exts);
+
+  files.forEach(file_path => {
+    let file_content = fs.readFileSync(file_path, 'utf8');
+    const includes = parseIncludes(file_content);
+    const include_dirs = getIncludeDirs(file_path, include_dir_map);
+    if (include_dirs.length == 0) {
+      console.warn(`File ${file_path} has empty inclusion!`);
+    }
+
+    const src_dir = path.dirname(file_path);
+
+    let modified = false;
+
+    includes.forEach(inc => {
+      const ref_path = resolveIncludePath(src_dir, inc.literal, include_dirs);
+      if (!ref_path) {
+        // console.log(`Header file ${inc.literal} in file ${src_path} not found!`);
+        return;
+      }
+
+      const new_rel_path = simplifyPathWOCurDir(include_dirs, ref_path);
+      if (!new_rel_path) {
+        console.log("Cannot locate reference without current directory");
+        new_rel_path = simplifyPath(include_dirs, ref_path);
+        if (new_rel_path.startsWith('..')) {
+          console.warn(`Using relative path for inclusion statement in file ${file_path}: ${new_rel_path}`);
+        }
+      }
+      if (new_rel_path != inc.literal) {
+        const new_inc_statement = inc.fullMatch.replace(inc.literal, new_rel_path);
+        console.log(`${inc.literal} -> ${new_rel_path}`);
+        file_content = file_content.replace(inc.fullMatch, new_inc_statement);
+        modified = true;
+      }
+    });
+
+    if (modified) {
+      // fs.writeFileSync(file_path, file_content, 'utf8');
+      console.log(`File ${file_path} modified, see modification above.`);
+    }
+  });
+}
+
 function moveFiles(move_pairs, with_git) {
   move_pairs.forEach(pair => {
     const src_abs = pair.oldLocation;
@@ -270,5 +331,6 @@ module.exports = {
   getIncludeDirsFromCompileCommands,
   generateMovePairs,
   updateReferences,
-  moveFiles,
+  simplifyReferences,
+  moveFiles
 };
