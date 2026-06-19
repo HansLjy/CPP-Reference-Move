@@ -3,88 +3,104 @@
 const fs = require('fs');
 const path = require('path');
 // Import the core functions from your module file
-const { generateMovePairs, simplifyReferences, updateReferences, moveFiles, getIncludeDirsFromCompileCommands } = require('./move.js');
+const { getAllFiles, generateMovePairs, simplifyReferences, updateReferences, moveFiles, getIncludeDirsFromCompileCommands } = require('./move.js');
 
 function printHelp() {
   console.log(`
-Usage: node index.js [options] source_dir (<source(s)> <destination> || --clean)
+Usage: node index.js source_files (--exc excluded_files) --cmd-path cmd_path (--show-changes-only) (--move <source(s)> <destination> | --clean) [options]
 
-source_dir: The directory to search for the cpp files.
+source_files: List of wildcards for all the files to scan.
+
+excluded_files: List of wildcards for all the files to exclude from scan.
+
+cmd_path: Path to compile_commands.json
 
 sources: The files to move, wildcards enabled
 
 destination: The destination of the files.
 
-source_dir sources and destination can be relative to cwd.
+All path are relative to cwd or absolute.
 
 Options:
-  --clean              Only clean the reference, do not move files
-  --cmd-path <path>    Path to compile_commands.json. Defaults to searching in 'build/'
+  --show-changes-only  Only show changes, do not apply them
   --git                Move files using 'git mv' instead of native 'mv'
-  -h, --help           Show this help manual
 `);
 }
 
 function runCli() {
   const args = process.argv.slice(2);
 
-  if (args.includes('-h') || args.includes('--help') || args.length === 0) {
+  if (args.length == 0) {
     printHelp();
     process.exit(0);
   }
 
-  let cmd_path = null;
-  let with_git = false;
-  let clean_only = false;
-  const positional_args = [];
+  let inc_wildcards = [], exc_wildcards = [];
 
-  // Parse arguments out manually to avoid unnecessary dependencies
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--cmd-path') {
-      cmd_path = args[++i];
-    } else if (args[i] === '--git') {
-      with_git = true;
-    } else if (args[i] === '--clean') {
-      clean_only = true;
-    } else {
-      positional_args.push(args[i]);
+  let current_arg_id = 0;
+  while (current_arg_id < args.length && !args[current_arg_id].startsWith('--')) {
+    inc_wildcards.push(args[current_arg_id]);
+    current_arg_id++;
+  }
+
+  if (current_arg_id == args.length) {
+    console.error('Error: Need options!');
+    process.exit(1);
+  }
+
+  if (args[current_arg_id] === '--exc') {
+    current_arg_id++;
+    while (current_arg_id < args.length && !args[current_arg_id].startsWith('--')) {
+      exc_wildcards.push(args[current_arg_id]);
+      current_arg_id++;
     }
   }
 
-  if (positional_args.length < 1) {
-    console.error("Error: Too few arguments");
-    printHelp();
+  const files = getAllFiles(inc_wildcards, exc_wildcards);
+  console.log('The files we are changing:');
+  files.forEach(file => {
+    console.log(file);
+  })
+
+  let cmd_path = null;
+  if (args[current_arg_id] === '--cmd-path') {
+    current_arg_id++;
+    if (current_arg_id < args.length && !args[current_arg_id].startsWith('--')) {
+      cmd_path = args[current_arg_id];
+      current_arg_id++;
+    }
+  }
+
+  if (!cmd_path) {
+    console.error('Error: No path to compile_commands.json given');
+  }
+
+  cmd_path = path.resolve(process.cwd(), cmd_path);
+
+  if (!fs.existsSync(cmd_path)) {
+    console.error(`Error: Could not locate compile_commands.json at "${cmd_path}"`);
     process.exit(1);
   }
 
-  const src_dir = path.resolve(positional_args.shift());
-
-  const final_cmd_path = cmd_path
-        ? path.resolve(cmd_path)
-        : path.resolve(process.cwd(), 'build', 'compile_commands.json');
-
-  if (!fs.existsSync(final_cmd_path)) {
-    console.error(`Error: Could not locate compile_commands.json at "${final_cmd_path}"`);
-    process.exit(1);
-  }
-
-  console.log(`Using compile_commands.json found at: ${final_cmd_path}`);
-  const commands = JSON.parse(fs.readFileSync(final_cmd_path, 'utf8'));
-
+  const commands = JSON.parse(fs.readFileSync(cmd_path, 'utf8'));
   const include_dir_map = getIncludeDirsFromCompileCommands(commands);
 
+  let show_changes_only = false;
+  if (args[current_arg_id] === '--show-changes-only') {
+    show_changes_only = true;
+    current_arg_id++;
+  }
 
-  if (clean_only) {
-    simplifyReferences(src_dir, include_dir_map);
+  if (args[current_arg_id] === '--clean') {
+    // clean only
+    simplifyReferences(files, include_dir_map);
     console.log("Success: Simplify references safely.");
-  } else {
-    // Expecting at least 2 remaining positional arguments (source(s) and destination)
-    if (positional_args.length < 2) {
-      console.error("Error: Missing source or destination path parameters.");
-      printHelp();
-      process.exit(1);
-    }
+    process.exit(0);
+  }
 
+  if (args[current_arg_id] === '--move') {
+    current_arg_id++;
+    positional_args = args.slice(current_arg_id);
     const dest = path.resolve(positional_args.pop());
     const sources = positional_args.map(src => path.resolve(src));
 
@@ -102,12 +118,11 @@ function runCli() {
     }
 
     // Note: References must be updated first before files are missing from their old locations
-    updateReferences(src_dir, include_dir_map, move_pairs);
+    updateReferences(files, include_dir_map, move_pairs);
     moveFiles(move_pairs, with_git);
 
     console.log("Success: Files moved and C++ header references updated safely.");
   }
-
 }
 
 runCli();

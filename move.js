@@ -2,28 +2,25 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-/**
- * Helper to recursively find all files in a directory matching an array of extensions.
- */
-function getAllFiles(dir, extensions, fileList = []) {
-  const files = fs.readdirSync(dir);
-  files.forEach(file => {
-    const filePath = path.join(dir, file);
-    if (fs.statSync(filePath).isDirectory()) {
-      getAllFiles(filePath, extensions, fileList);
-    } else {
-      if (extensions.includes(path.extname(file).toLowerCase())) {
-        fileList.push(filePath);
-      }
-    }
-  });
-  return fileList;
+function getAllFiles(inc_wildcards, exc_wildcards) {
+  const matched_files = new Set();
+
+  const cwd = process.cwd();
+  fs.globSync(inc_wildcards).forEach(file_path => {
+    matched_files.add(path.resolve(cwd, file_path));
+  })
+
+  const excluded_files = new Set();
+  fs.globSync(exc_wildcards).forEach(file_path => {
+    excluded_files.add(path.resolve(cwd, file_path));
+  })
+
+  return Array.from(matched_files).filter(file => !excluded_files.has(file));
 }
 
 /**
  * Helper to parse #include directives from a C++ file content.
  * Returns an array of objects containing the literal included string and its line content.
- * WARNING: We only deal with "" includes, not <> includes.
  */
 function parseIncludes(fileContent) {
   const includeRegex = /#\s*include\s*[<"]([^>"]+)[">]/g;
@@ -194,17 +191,18 @@ function simplifyPathWOCurDir(inc_dirs, ref_path) {
       }
     }
   });
-  return path.relative(deepest_inc_dir, ref_path);
+  if (!deepest_inc_dir) {
+    return null;
+  } else {
+    return path.relative(deepest_inc_dir, ref_path);
+  }
 }
 
-function updateReferences(root_dir, include_dir_map, move_pairs) {
-  const cpp_exts = ['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx'];
-  const files = getAllFiles(root_dir, cpp_exts);
-
+function updateReferences(files, include_dir_map, move_pairs) {
   // moveMap is a map from absolute path of old location to absolute path of new location
   const move_map = new Map();
   move_pairs.forEach(pair => {
-    move_map.set(path.resolve(root_dir, pair.oldLocation), path.resolve(root_dir, pair.newLocation));
+    move_map.set(pair.oldLocation, pair.newLocation);
   });
 
   console.log("Intended file renaming:")
@@ -242,7 +240,7 @@ function updateReferences(root_dir, include_dir_map, move_pairs) {
         if (new_rel_path.startsWith('..')) {
           console.warn(`In file ${file_path}, ${inc.literal} is renamed to ${new_rel_path} using relative path!`)
         } else {
-          console.log(`${inc.literal} -> ${new_rel_path}`);
+          console.log('\x1b[32m%s\x1b[0m', `${inc.literal} -> ${new_rel_path}`);
         }
         file_content = file_content.replace(inc.fullMatch, new_inc_statement);
         modified = true;
@@ -256,10 +254,7 @@ function updateReferences(root_dir, include_dir_map, move_pairs) {
   });
 }
 
-function simplifyReferences(root_dir, include_dir_map) {
-  const cpp_exts = ['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx'];
-  const files = getAllFiles(root_dir, cpp_exts);
-
+function simplifyReferences(files, include_dir_map) {
   files.forEach(file_path => {
     let file_content = fs.readFileSync(file_path, 'utf8');
     const includes = parseIncludes(file_content);
@@ -279,24 +274,24 @@ function simplifyReferences(root_dir, include_dir_map) {
         return;
       }
 
-      const new_rel_path = simplifyPathWOCurDir(include_dirs, ref_path);
+      let new_rel_path = simplifyPathWOCurDir(include_dirs, ref_path);
       if (!new_rel_path) {
         console.log("Cannot locate reference without current directory");
-        new_rel_path = simplifyPath(include_dirs, ref_path);
+        new_rel_path = simplifyPath(src_dir, include_dirs, ref_path);
         if (new_rel_path.startsWith('..')) {
-          console.warn(`Using relative path for inclusion statement in file ${file_path}: ${new_rel_path}`);
+          console.warn('\x1b[33m%s\x1b[0m', `Using relative path for inclusion statement in file ${file_path}: ${new_rel_path}`);
         }
       }
       if (new_rel_path != inc.literal) {
         const new_inc_statement = inc.fullMatch.replace(inc.literal, new_rel_path);
-        console.log(`${inc.literal} -> ${new_rel_path}`);
+        console.log('\x1b[32m%s\x1b[0m', `${inc.literal} -> ${new_rel_path}`);
         file_content = file_content.replace(inc.fullMatch, new_inc_statement);
         modified = true;
       }
     });
 
     if (modified) {
-      // fs.writeFileSync(file_path, file_content, 'utf8');
+      fs.writeFileSync(file_path, file_content, 'utf8');
       console.log(`File ${file_path} modified, see modification above.`);
     }
   });
@@ -328,6 +323,7 @@ function moveFiles(move_pairs, with_git) {
 }
 
 module.exports = {
+  getAllFiles,
   getIncludeDirsFromCompileCommands,
   generateMovePairs,
   updateReferences,
